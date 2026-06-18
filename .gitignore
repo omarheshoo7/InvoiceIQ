@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+.env
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Uploaded invoice files (never commit user data)
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Generated exports
+*.xlsx
+*.csv
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
