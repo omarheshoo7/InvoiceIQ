@@ -21,15 +21,24 @@ A Python + Streamlit app that extracts structured data from invoice PDFs and ima
 - Warns about empty or partially filled line item rows
 - Non-blocking — warnings are shown but export is never prevented
 
+### Milestone 3 — SQLite Invoice History
+- Explicit **Save to History** button — saves only when you choose, preventing duplicates
+- Local SQLite database (`data/invoices.db`) stores invoice fields + line items
+- **History page** — browse all saved invoices in a table, newest first
+- **Search / filter** — real-time filtering by vendor name or invoice number
+- **Re-open** — click any record to reload its fields and line items back into the main form, ready to edit and re-export
+- **Delete** — remove a record with a confirmation step; line items are removed automatically
+
 ## Tech Stack
 
 | Layer | Library |
 |-------|---------|
-| UI | Streamlit |
+| UI | Streamlit (multipage) |
 | PDF extraction | PyMuPDF (`fitz`) |
 | OCR | pytesseract + Pillow |
 | Data | pandas |
 | Excel export | openpyxl |
+| Database | SQLite (stdlib `sqlite3`) |
 
 ## Project Structure
 
@@ -43,10 +52,18 @@ InvoiceIQ/
 │   ├── extractor.py    # PDF/image → raw text
 │   ├── parser.py       # raw text → structured fields (regex)
 │   ├── validator.py    # validation checks → list of warnings/errors
-│   └── exporter.py     # fields + line items → Excel
+│   ├── exporter.py     # fields + line items → Excel
+│   └── database.py     # SQLite read/write helpers
+│
+├── pages/
+│   └── history.py      # Streamlit History page
+│
+├── tests/
+│   └── test_parser.py  # pytest smoke tests for the parser
 │
 └── data/
-    └── uploads/        # temp upload folder (gitignored)
+    ├── uploads/        # temp upload folder (gitignored)
+    └── invoices.db     # local SQLite database (gitignored)
 ```
 
 ## Setup
@@ -108,6 +125,6 @@ The regex parser works well for common invoice layouts. For unusual formats, use
 |-----------|------|
 | ✅ 1 | Upload → OCR/parse → manual correct → export Excel |
 | ✅ 2 | Validation layer (missing fields, suspicious values, warnings) |
-| 3 | SQLite history — save/browse past extractions |
+| ✅ 3 | SQLite history — save, browse, re-open, delete past invoices |
 | 4 | Plotly dashboard — spending trends, vendor summaries |
 | 5 | Optional AI parser (Claude/GPT) for higher accuracy |

@@ -10,9 +10,10 @@ venv/
 dist/
 build/
 
-# Uploaded invoice files (never commit user data)
+# Uploaded invoice files and local database — never commit user data
 data/uploads/*
 !data/uploads/.gitkeep
+data/invoices.db
 
 # Generated exports
 *.xlsx

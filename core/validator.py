@@ -70,22 +70,38 @@ def _check_total_amount(fields: dict, issues: list[ValidationIssue]) -> None:
 
 
 def _check_subtotal_tax(fields: dict, issues: list[ValidationIssue]) -> None:
-    """If subtotal AND tax are both filled, they should add up to the total."""
+    """Validate Subtotal + Tax ≈ Total when all three are available.
+
+    Tax may be stored as an amount ("111.35") or a rate ("5.00%").
+    When it is a rate, the expected tax amount is derived from Subtotal × rate.
+    """
     subtotal_str = fields.get("subtotal", "").strip()
     tax_str      = fields.get("tax", "").strip()
     total_str    = fields.get("total_amount", "").strip()
 
     if not (subtotal_str and tax_str and total_str):
-        return  # Nothing to check if any of the three is missing
+        return
 
     try:
         subtotal = float(subtotal_str.replace(",", ""))
-        tax      = float(tax_str.replace(",", ""))
         total    = float(total_str.replace(",", ""))
     except ValueError:
-        return  # Non-numeric values are caught by other checks
+        return
 
-    expected = subtotal + tax
+    # Determine the tax amount — either direct value or derived from a percentage rate
+    if tax_str.endswith("%"):
+        try:
+            rate       = float(tax_str.rstrip("%").strip()) / 100
+            tax_amount = subtotal * rate
+        except ValueError:
+            return
+    else:
+        try:
+            tax_amount = float(tax_str.replace(",", ""))
+        except ValueError:
+            return
+
+    expected = subtotal + tax_amount
     if abs(expected - total) > TOLERANCE:
         issues.append(ValidationIssue(
             "warning",
@@ -125,10 +141,38 @@ def _check_line_item_row_totals(df: pd.DataFrame, issues: list[ValidationIssue])
 def _check_line_items_sum_vs_total(
     fields: dict, df: pd.DataFrame, issues: list[ValidationIssue]
 ) -> None:
-    """Sum of all line item Totals should match the invoice Total Amount."""
+    """Line item sum should match the Subtotal (when present) or the Invoice Total.
+
+    When a Subtotal field is filled, tax has already been excluded from the line
+    items — so comparing the sum to the grand Total would always trigger a false
+    warning.  In that case we compare against Subtotal instead and return early.
+    """
     if df is None or df.empty:
         return
 
+    line_totals = pd.to_numeric(df.get("Total", pd.Series(dtype=float)), errors="coerce")
+    line_sum    = line_totals.sum()
+
+    if line_sum == 0:
+        return  # Nothing entered — nothing to compare
+
+    subtotal_str = fields.get("subtotal", "").strip()
+
+    if subtotal_str:
+        # Subtotal is the correct anchor when tax is separate from line items
+        try:
+            subtotal = float(subtotal_str.replace(",", ""))
+        except ValueError:
+            return
+        if abs(line_sum - subtotal) > TOLERANCE:
+            issues.append(ValidationIssue(
+                "warning",
+                f"Sum of line item Totals ({line_sum:.2f}) does not match "
+                f"Subtotal ({subtotal_str}).",
+            ))
+        return  # Don't also check against grand total
+
+    # No subtotal — fall back to comparing against the grand total
     total_str = fields.get("total_amount", "").strip()
     if not total_str:
         return
@@ -138,18 +182,11 @@ def _check_line_items_sum_vs_total(
     except ValueError:
         return
 
-    line_totals = pd.to_numeric(df.get("Total", pd.Series(dtype=float)), errors="coerce")
-    line_sum    = line_totals.sum()
-
-    # Only warn when the user has actually entered some totals
-    if line_sum == 0:
-        return
-
     if abs(line_sum - invoice_total) > TOLERANCE:
         issues.append(ValidationIssue(
             "warning",
             f"Sum of line item Totals ({line_sum:.2f}) does not match "
-            f"Invoice Total Amount ({invoice_total:.2f}).",
+            f"Invoice Total Amount ({total_str}).",
         ))
 
 

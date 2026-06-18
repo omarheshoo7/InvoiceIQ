@@ -1,11 +1,15 @@
 import re
 
+import pandas as pd
+
 EMPTY_FIELDS: dict[str, str] = {
     "invoice_number": "",
     "invoice_date":   "",
     "vendor_name":    "",
     "total_amount":   "",
     "currency":       "USD",
+    "subtotal":       "",
+    "tax":            "",
 }
 
 
@@ -20,6 +24,8 @@ def parse_invoice(text: str) -> dict[str, str]:
         "vendor_name":    _find_vendor(text),
         "total_amount":   _find_total(text),
         "currency":       _find_currency(text),
+        "subtotal":       _find_subtotal(text),
+        "tax":            _find_tax(text),
     }
 
 
@@ -197,6 +203,98 @@ def _find_total(text: str) -> str:
                 m = number_re.search(lines[i + j].strip())
                 if m:
                     return m.group(1).replace(",", "")
+
+    return ""
+
+
+# ── Line item extraction ──────────────────────────────────────────────────────
+
+# Each token must satisfy:
+#   • Item number: 1–2 digits NOT preceded by another digit (avoids 1324, 10001…)
+#   • Description: starts with a letter, only letters/spaces, lazy 1–50 chars
+#     (digits in descriptions are excluded intentionally — they cause false matches)
+#   • Quantity: integer or decimal
+#   • Unit price and total: MUST have exactly 2 decimal places (.NN) — this is
+#     the strong false-positive filter; bare integers like "10001" never match.
+_ITEM_PATTERN = re.compile(
+    r"(?<!\d)(\d{1,2})"            # item number
+    r"\s+"
+    r"([A-Za-z][A-Za-z\s]{1,50}?)" # description (letters/spaces only, lazy)
+    r"\s+"
+    r"(\d+(?:\.\d{1,4})?)"         # quantity
+    r"\s+"
+    r"[$€£¥]?"                     # optional currency before unit price
+    r"([\d,]+\.\d{2})"             # unit price (exactly 2 decimal places)
+    r"\s+"
+    r"[$€£¥]?"                     # optional currency before total
+    r"([\d,]+\.\d{2})",            # total (exactly 2 decimal places)
+    re.MULTILINE,
+)
+
+
+def parse_line_items(text: str) -> pd.DataFrame:
+    """Extract line items from invoice text.
+
+    Returns a DataFrame with columns: Description, Quantity, Unit Price, Total.
+    If no items are detected the DataFrame is empty (columns present, no rows).
+    """
+    rows = []
+    for m in _ITEM_PATTERN.finditer(text):
+        desc = m.group(2).strip()
+        if len(desc) < 2:
+            continue
+        rows.append({
+            "Description": desc,
+            "Quantity":    float(m.group(3)),
+            "Unit Price":  float(m.group(4).replace(",", "")),
+            "Total":       float(m.group(5).replace(",", "")),
+        })
+    if not rows:
+        return pd.DataFrame(columns=["Description", "Quantity", "Unit Price", "Total"])
+    return pd.DataFrame(rows)
+
+
+def _find_subtotal(text: str) -> str:
+    # Matches "Sub Total", "Subtotal", "Sub-total" with optional separator and currency symbol.
+    m = re.search(
+        r"sub[\s\-]*total\s*[:#]?\s*[$€£¥]?([\d,]+\.?\d{0,2})",
+        text, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().replace(",", "")
+    return ""
+
+
+def _find_tax(text: str) -> str:
+    # Priority: percentage rates first (unambiguous), then named-amount variants,
+    # then a bare "Tax X" amount last (broadest, most likely to false-match).
+    # A rate is returned as "X%" so the validator can distinguish it from an amount.
+
+    # 1. "Tax Rate 5.00%"
+    m = re.search(r"tax\s+rate\s*[:#]?\s*([\d.]+)\s*%", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip() + "%"
+
+    # 2. "VAT 14%" or "VAT Rate 14%"
+    m = re.search(r"\bvat\b\s*(?:rate)?\s*[:#]?\s*([\d.]+)\s*%", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip() + "%"
+
+    # 3. "Tax Amount 111.35" or "Tax: 111.35" or "Tax 111.35" (not followed by %)
+    m = re.search(
+        r"\btax\s*(?:amount)?\s*[:#]?\s*[$€£¥]?([\d,]+\.?\d{0,2})(?!\s*%)",
+        text, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().replace(",", "")
+
+    # 4. "VAT Amount 111.35"
+    m = re.search(
+        r"\bvat\s+amount\s*[:#]?\s*[$€£¥]?([\d,]+\.?\d{0,2})(?!\s*%)",
+        text, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().replace(",", "")
 
     return ""
 

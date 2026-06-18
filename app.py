@@ -1,9 +1,10 @@
 import pandas as pd
 import streamlit as st
 
+from core.database import init_db, save_invoice
 from core.extractor import extract_text
 from core.exporter import export_to_excel
-from core.parser import parse_invoice
+from core.parser import parse_invoice, parse_line_items
 from core.validator import validate_invoice
 
 st.set_page_config(
@@ -15,13 +16,18 @@ st.set_page_config(
 st.title("📄 InvoiceIQ — Invoice-to-Excel Extractor")
 st.caption("Upload an invoice PDF or image · review extracted fields · export clean Excel.")
 
+# Ensure DB and tables exist on every page load (no-op if already created)
+init_db()
+
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for key, default in [
-    ("current_file", None),
-    ("raw_text",     None),
-    ("fields",       None),
-    ("line_items",   None),
+    ("current_file",          None),
+    ("raw_text",              None),
+    ("fields",                None),
+    ("line_items",            None),
+    ("loaded_from_history",   False),
+    ("source_filename",       ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -34,45 +40,60 @@ uploaded_file = st.file_uploader(
     help="Supports digital PDFs, scanned PDFs, and images (PNG/JPG).",
 )
 
-if uploaded_file is None:
-    st.info("Upload an invoice file to get started.")
+# Allow the page to proceed either from a fresh upload OR from history re-open
+if uploaded_file is None and not st.session_state.loaded_from_history:
+    st.info("Upload an invoice file to get started, or re-open one from the **History** page.")
     st.stop()
 
-# Reset state whenever a different file is loaded
-file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-if st.session_state.current_file != file_id:
-    st.session_state.current_file = file_id
-    st.session_state.raw_text     = None
-    st.session_state.fields       = None
-    st.session_state.line_items   = None
 
-file_bytes = uploaded_file.read()
+# ── Handle fresh upload ───────────────────────────────────────────────────────
+if uploaded_file is not None:
+    # When a new (different) file is uploaded, reset all extracted state
+    file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+    if st.session_state.current_file != file_id:
+        st.session_state.current_file        = file_id
+        st.session_state.raw_text            = None
+        st.session_state.fields              = None
+        st.session_state.line_items          = None
+        st.session_state.loaded_from_history = False
+        st.session_state.source_filename     = uploaded_file.name
+
+    file_bytes = uploaded_file.read()
+
+    if st.session_state.raw_text is None:
+        with st.spinner("Extracting text from invoice…"):
+            try:
+                raw_text, method = extract_text(file_bytes, uploaded_file.name)
+            except ValueError as e:
+                st.error(str(e))
+                st.stop()
+            except Exception as e:
+                st.error(f"Extraction failed: {e}")
+                st.stop()
+
+        st.session_state.raw_text = raw_text
+        parsed = parse_invoice(raw_text)
+        st.session_state.fields     = parsed
+        st.session_state.line_items = parse_line_items(raw_text)
+        method_label = "native PDF text" if method == "pdf_native" else "OCR (pytesseract)"
+        st.success(f"Extracted using **{method_label}**.")
 
 
-# ── Extract text ──────────────────────────────────────────────────────────────
-if st.session_state.raw_text is None:
-    with st.spinner("Extracting text from invoice…"):
-        try:
-            raw_text, method = extract_text(file_bytes, uploaded_file.name)
-        except ValueError as e:
-            st.error(str(e))
-            st.stop()
-        except Exception as e:
-            st.error(f"Extraction failed: {e}")
-            st.stop()
-    st.session_state.raw_text = raw_text
-    parsed = parse_invoice(raw_text)
-    parsed.setdefault("subtotal", "")
-    parsed.setdefault("tax",      "")
-    st.session_state.fields   = parsed
-    st.session_state.line_items = pd.DataFrame(
-        columns=["Description", "Quantity", "Unit Price", "Total"]
+# ── Raw text / history banner ─────────────────────────────────────────────────
+if st.session_state.loaded_from_history:
+    st.info(
+        "Reopened from history — original OCR text is not available. "
+        "Edit any fields below and re-export as needed."
     )
-    method_label = "native PDF text" if method == "pdf_native" else "OCR (pytesseract)"
-    st.success(f"Extracted using **{method_label}**.")
-
-with st.expander("View raw extracted text"):
-    st.text_area("", st.session_state.raw_text, height=180, disabled=True, label_visibility="collapsed")
+else:
+    with st.expander("View raw extracted text"):
+        st.text_area(
+            "",
+            st.session_state.raw_text,
+            height=180,
+            disabled=True,
+            label_visibility="collapsed",
+        )
 
 st.divider()
 
@@ -91,7 +112,7 @@ with col1:
 
 with col2:
     f["total_amount"] = st.text_input("Total Amount", value=f.get("total_amount", ""))
-    currency_options  = ["USD", "EUR", "GBP", "JPY", "Other"]
+    currency_options  = ["USD", "EUR", "GBP", "JPY", "EGP", "Other"]
     saved_currency    = f.get("currency", "USD")
     default_idx       = currency_options.index(saved_currency) if saved_currency in currency_options else 0
     f["currency"]     = st.selectbox("Currency", options=currency_options, index=default_idx)
@@ -148,7 +169,7 @@ st.divider()
 # ── Export ────────────────────────────────────────────────────────────────────
 st.subheader("Export")
 
-if st.button("Generate Excel File", type="primary", use_container_width=False):
+if st.button("Generate Excel File", type="primary"):
     with st.spinner("Building Excel file…"):
         excel_bytes = export_to_excel(st.session_state.fields, st.session_state.line_items)
 
@@ -161,3 +182,21 @@ if st.button("Generate Excel File", type="primary", use_container_width=False):
         file_name = filename,
         mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+st.divider()
+
+
+# ── Save to History ───────────────────────────────────────────────────────────
+st.subheader("Save to History")
+st.caption(
+    "Save this invoice to your local database so you can retrieve it later "
+    "from the **History** page. You control when to save — click once per invoice."
+)
+
+if st.button("Save to History"):
+    record_id = save_invoice(
+        fields          = st.session_state.fields,
+        line_items_df   = st.session_state.line_items,
+        source_filename = st.session_state.get("source_filename", "unknown"),
+    )
+    st.toast(f"Invoice saved to history (record #{record_id}).", icon="✅")

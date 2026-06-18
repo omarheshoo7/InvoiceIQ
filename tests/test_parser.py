@@ -8,8 +8,11 @@ These tests use OCR-style text that matches the layouts the parser must handle,
 including the exact failure cases reported during development.
 """
 
+import pandas as pd
 import pytest
-from core.parser import parse_invoice
+
+from core.parser import parse_invoice, parse_line_items
+from core.validator import validate_invoice
 
 
 # ── Sample OCR texts ──────────────────────────────────────────────────────────
@@ -179,8 +182,14 @@ SAMPLE_ZYLKER = (
     "Invoice Date 05 Aug 2024 "
     "Terms Due on Receipt Due Date 05 Aug 2024 "
     "Bill To Ship To Ms. Mary D. Dunton 1324 Hinkle Lake Road "
-    "Sub Total $2,227.00 Tax Rate 5.00% Total $2,338.35 "
-    "Balance Due $2,338.35 Full payment is due upon receipt of this invoice."
+    "Late payments may incur additional charges or interest as per the applicable laws. "
+    "1324 Hinkle Lake Road Needham. Needham 02192 Maine 02192 Maine "
+    "# Description Qty Rate Amou: "
+    "1 Camera 1.00 $899.00 899.00 DSLR camera with advanced shooting capabilities "
+    "2 Fitness Tracker 1.00 $129.00 $129.00 Activity tracker with heart rate monitoring "
+    "3 Laptop 1.00 $1199.00 $1199.00 Lightweight laptop with a powerful processor "
+    "Sub Total $2,227.00 Thanks for shopping with us. Tax Rate 5.00% Total $2,338.35 "
+    "Terms & Conditions Balance Due $2,338.35 Full payment is due upon receipt of this invoice."
 )
 
 
@@ -230,3 +239,150 @@ class TestZylkerInvoice:
 
     def test_currency(self):
         assert parse_invoice(SAMPLE_ZYLKER)["currency"] == "USD"
+
+
+# ── Line Item Extraction ──────────────────────────────────────────────────────
+
+SAMPLE_LINE_ITEMS_MULTILINE = """\
+1 Consulting 2.00 $150.00 $300.00
+2 Support 1.00 $75.00 $75.00
+Total $375.00
+"""
+
+
+class TestLineItems:
+    def test_zylker_item_count(self):
+        """Three line items must be found in the Zylker OCR text."""
+        df = parse_line_items(SAMPLE_ZYLKER)
+        assert len(df) == 3, f"Expected 3 items, got {len(df)}: {df.to_dict('records')}"
+
+    def test_zylker_first_item(self):
+        df = parse_line_items(SAMPLE_ZYLKER)
+        assert df.iloc[0]["Description"] == "Camera"
+        assert df.iloc[0]["Quantity"]    == 1.0
+        assert df.iloc[0]["Unit Price"]  == 899.0
+        assert df.iloc[0]["Total"]       == 899.0
+
+    def test_zylker_second_item(self):
+        df = parse_line_items(SAMPLE_ZYLKER)
+        assert df.iloc[1]["Description"] == "Fitness Tracker"
+        assert df.iloc[1]["Quantity"]    == 1.0
+        assert df.iloc[1]["Unit Price"]  == 129.0
+        assert df.iloc[1]["Total"]       == 129.0
+
+    def test_zylker_third_item(self):
+        df = parse_line_items(SAMPLE_ZYLKER)
+        assert df.iloc[2]["Description"] == "Laptop"
+        assert df.iloc[2]["Quantity"]    == 1.0
+        assert df.iloc[2]["Unit Price"]  == 1199.0
+        assert df.iloc[2]["Total"]       == 1199.0
+
+    def test_multiline_format(self):
+        """Two items, each on its own line, with a Total line at the end."""
+        df = parse_line_items(SAMPLE_LINE_ITEMS_MULTILINE)
+        assert len(df) == 2
+        assert df.iloc[0]["Description"] == "Consulting"
+        assert df.iloc[0]["Quantity"]    == 2.0
+        assert df.iloc[0]["Unit Price"]  == 150.0
+        assert df.iloc[0]["Total"]       == 300.0
+
+    def test_no_items_returns_empty_df(self):
+        """Text with no line items returns an empty DataFrame (columns intact)."""
+        df = parse_line_items("INVOICE\nTotal $500.00\n")
+        assert df.empty
+        assert list(df.columns) == ["Description", "Quantity", "Unit Price", "Total"]
+
+
+# ── Subtotal and Tax Extraction ───────────────────────────────────────────────
+
+class TestSubtotalExtraction:
+    def test_zylker_subtotal(self):
+        """'Sub Total $2,227.00' must be parsed to '2227.00'."""
+        assert parse_invoice(SAMPLE_ZYLKER)["subtotal"] == "2227.00"
+
+    def test_zylker_tax_rate(self):
+        """'Tax Rate 5.00%' must be returned as '5.00%' (rate, not amount)."""
+        assert parse_invoice(SAMPLE_ZYLKER)["tax"] == "5.00%"
+
+    def test_subtotal_with_colon(self):
+        result = parse_invoice("Subtotal: $1,500.00\nTax: 75.00\nTotal: $1,575.00")
+        assert result["subtotal"] == "1500.00"
+
+    def test_sub_dash_total(self):
+        result = parse_invoice("Sub-total 1500.00\nTotal 1500.00")
+        assert result["subtotal"] == "1500.00"
+
+    def test_vat_percentage(self):
+        result = parse_invoice("Subtotal: 100.00\nVAT 20%\nTotal: 120.00")
+        assert result["tax"] == "20%"
+
+    def test_tax_amount(self):
+        result = parse_invoice("Subtotal: 1000.00\nTax Amount 111.35\nTotal: 1111.35")
+        assert result["tax"] == "111.35"
+
+    def test_no_subtotal_returns_blank(self):
+        assert parse_invoice(SAMPLE_CLEAN_INVOICE)["subtotal"] == ""
+
+
+# ── Validation: Subtotal + Tax ────────────────────────────────────────────────
+
+_EMPTY_DF = pd.DataFrame(columns=["Description", "Quantity", "Unit Price", "Total"])
+
+
+def _items_df(total: float) -> pd.DataFrame:
+    """One-row DataFrame whose Total column equals `total`."""
+    return pd.DataFrame([{
+        "Description": "Item", "Quantity": 1.0,
+        "Unit Price": total, "Total": total,
+    }])
+
+
+class TestValidationWithTax:
+    def test_zylker_no_false_line_sum_warning(self):
+        """Full Zylker pipeline: line sum 2227 == subtotal 2227 → no line-item warning."""
+        fields = parse_invoice(SAMPLE_ZYLKER)
+        df     = parse_line_items(SAMPLE_ZYLKER)
+        issues = validate_invoice(fields, df)
+        line_sum_msgs = [i.message for i in issues if "line item" in i.message.lower()]
+        assert not line_sum_msgs, f"Unexpected line-item warning: {line_sum_msgs}"
+
+    def test_zylker_subtotal_plus_tax_rate_no_warning(self):
+        """2227 × 5% + 2227 = 2338.35 matches Total — no subtotal/tax mismatch."""
+        fields = {**parse_invoice(SAMPLE_ZYLKER)}
+        issues = validate_invoice(fields, _EMPTY_DF)
+        bad = [i.message for i in issues if "don't match" in i.message.lower()]
+        assert not bad, f"Unexpected mismatch warning: {bad}"
+
+    def test_tax_amount_variant_no_warning(self):
+        """Subtotal 1000 + Tax amount 100 = Total 1100 — passes cleanly."""
+        fields = {
+            "invoice_number": "X", "invoice_date": "X",
+            "vendor_name": "X", "total_amount": "1100.00",
+            "currency": "USD", "subtotal": "1000.00", "tax": "100.00",
+        }
+        issues = validate_invoice(fields, _items_df(1000.00))
+        bad = [i.message for i in issues if "don't match" in i.message.lower()]
+        assert not bad, f"Unexpected mismatch warning: {bad}"
+
+    def test_wrong_total_triggers_warning(self):
+        """Subtotal 1000 + Tax 10% = 1100, but Total is 1200 → warning expected."""
+        fields = {
+            "invoice_number": "X", "invoice_date": "X",
+            "vendor_name": "X", "total_amount": "1200.00",
+            "currency": "USD", "subtotal": "1000.00", "tax": "10%",
+        }
+        issues = validate_invoice(fields, _EMPTY_DF)
+        assert any("don't match" in i.message.lower() for i in issues)
+
+    def test_no_subtotal_compares_to_total(self):
+        """Without subtotal, a line-sum mismatch against Total is still flagged."""
+        fields = {
+            "invoice_number": "X", "invoice_date": "X",
+            "vendor_name": "X", "total_amount": "150.00",
+            "currency": "USD", "subtotal": "", "tax": "",
+        }
+        issues = validate_invoice(fields, _items_df(100.00))
+        assert any(
+            "line item" in i.message.lower() and "total amount" in i.message.lower()
+            for i in issues
+        )
