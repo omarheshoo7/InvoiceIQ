@@ -4,6 +4,7 @@ import streamlit as st
 from core.extractor import extract_text
 from core.exporter import export_to_excel
 from core.parser import parse_invoice
+from core.validator import validate_invoice
 
 st.set_page_config(
     page_title="InvoiceIQ",
@@ -60,7 +61,10 @@ if st.session_state.raw_text is None:
             st.error(f"Extraction failed: {e}")
             st.stop()
     st.session_state.raw_text = raw_text
-    st.session_state.fields   = parse_invoice(raw_text)
+    parsed = parse_invoice(raw_text)
+    parsed.setdefault("subtotal", "")
+    parsed.setdefault("tax",      "")
+    st.session_state.fields   = parsed
     st.session_state.line_items = pd.DataFrame(
         columns=["Description", "Quantity", "Unit Price", "Total"]
     )
@@ -91,6 +95,8 @@ with col2:
     saved_currency    = f.get("currency", "USD")
     default_idx       = currency_options.index(saved_currency) if saved_currency in currency_options else 0
     f["currency"]     = st.selectbox("Currency", options=currency_options, index=default_idx)
+    f["subtotal"]     = st.text_input("Subtotal (optional)",  value=f.get("subtotal", ""))
+    f["tax"]          = st.text_input("Tax / VAT (optional)", value=f.get("tax",      ""))
 
 st.divider()
 
@@ -111,6 +117,30 @@ edited_df = st.data_editor(
     },
 )
 st.session_state.line_items = edited_df
+
+st.divider()
+
+
+# ── Validation ────────────────────────────────────────────────────────────────
+st.subheader("Validation")
+
+issues = validate_invoice(st.session_state.fields, st.session_state.line_items)
+
+if not issues:
+    st.success("All checks passed — no issues found.")
+else:
+    errors   = [i for i in issues if i.level == "error"]
+    warnings = [i for i in issues if i.level == "warning"]
+
+    if errors:
+        st.error(f"**{len(errors)} error(s) found** — please review before exporting.")
+        for issue in errors:
+            st.error(f"- {issue.message}")
+
+    if warnings:
+        st.warning(f"**{len(warnings)} warning(s)** — you can still export, but please review.")
+        for issue in warnings:
+            st.warning(f"- {issue.message}")
 
 st.divider()
 
