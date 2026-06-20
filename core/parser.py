@@ -209,17 +209,14 @@ def _find_total(text: str) -> str:
 
 # ── Line item extraction ──────────────────────────────────────────────────────
 
-# Each token must satisfy:
-#   • Item number: 1–2 digits NOT preceded by another digit (avoids 1324, 10001…)
-#   • Description: starts with a letter, only letters/spaces, lazy 1–50 chars
-#     (digits in descriptions are excluded intentionally — they cause false matches)
-#   • Quantity: integer or decimal
-#   • Unit price and total: MUST have exactly 2 decimal places (.NN) — this is
-#     the strong false-positive filter; bare integers like "10001" never match.
+# Pattern 1 — Zylker-style: [row_num] [desc] [qty] [unit_price] [total]
+# 5 numeric columns.  Requires item number at the front.
+# Description: letters/spaces only (no digits — prevents false matches with
+# prices and reference numbers).
 _ITEM_PATTERN = re.compile(
-    r"(?<!\d)(\d{1,2})"            # item number
+    r"(?<!\d)(\d{1,2})"            # item number (1–2 digits, not after a digit)
     r"\s+"
-    r"([A-Za-z][A-Za-z\s]{1,50}?)" # description (letters/spaces only, lazy)
+    r"([A-Za-z][A-Za-z\s]{1,50}?)" # description: letters/spaces only, lazy
     r"\s+"
     r"(\d+(?:\.\d{1,4})?)"         # quantity
     r"\s+"
@@ -231,13 +228,34 @@ _ITEM_PATTERN = re.compile(
     re.MULTILINE,
 )
 
+# Pattern 2 — QTY-first: [qty] [desc] [unit_price] [total]
+# 4 numeric columns.  Used when Pattern 1 finds nothing (different table layout).
+# Description allows parentheses, &, /, - and other punctuation, but still
+# NO digits — the digit exclusion stops the lazy match from swallowing price
+# values like "Sales Tax (5%) 22.50" into the description.
+_QTY_FIRST_PATTERN = re.compile(
+    r"(?<!\d)"
+    r"(\d{1,3}(?:\.\d{1,4})?)"              # qty: up to 3-digit integer or decimal
+    r"\s+"
+    r"([A-Za-z][A-Za-z\s\(\)/&\-,]{0,79}?)" # description: richer char class, lazy
+    r"\s+"
+    r"[$€£¥]?([\d,]+\.\d{2})"               # unit price (exactly 2 decimal places)
+    r"\s+"
+    r"[$€£¥]?([\d,]+\.\d{2})",              # total (exactly 2 decimal places)
+    re.MULTILINE,
+)
+
 
 def parse_line_items(text: str) -> pd.DataFrame:
     """Extract line items from invoice text.
 
-    Returns a DataFrame with columns: Description, Quantity, Unit Price, Total.
-    If no items are detected the DataFrame is empty (columns present, no rows).
+    Tries two patterns in order:
+      1. Zylker-style (row_num + desc + qty + unit_price + total)
+      2. QTY-first   (qty + desc + unit_price + total)
+    Returns the results of the first pattern that finds at least one row.
+    Returns an empty DataFrame if neither pattern matches.
     """
+    # --- Pattern 1 ---
     rows = []
     for m in _ITEM_PATTERN.finditer(text):
         desc = m.group(2).strip()
@@ -249,9 +267,24 @@ def parse_line_items(text: str) -> pd.DataFrame:
             "Unit Price":  float(m.group(4).replace(",", "")),
             "Total":       float(m.group(5).replace(",", "")),
         })
-    if not rows:
-        return pd.DataFrame(columns=["Description", "Quantity", "Unit Price", "Total"])
-    return pd.DataFrame(rows)
+    if rows:
+        return pd.DataFrame(rows)
+
+    # --- Pattern 2 (fallback) ---
+    for m in _QTY_FIRST_PATTERN.finditer(text):
+        desc = m.group(2).strip()
+        if len(desc) < 2:
+            continue
+        rows.append({
+            "Description": desc,
+            "Quantity":    float(m.group(1)),
+            "Unit Price":  float(m.group(3).replace(",", "")),
+            "Total":       float(m.group(4).replace(",", "")),
+        })
+    if rows:
+        return pd.DataFrame(rows)
+
+    return pd.DataFrame(columns=["Description", "Quantity", "Unit Price", "Total"])
 
 
 def _find_subtotal(text: str) -> str:
@@ -275,12 +308,17 @@ def _find_tax(text: str) -> str:
     if m:
         return m.group(1).strip() + "%"
 
-    # 2. "VAT 14%" or "VAT Rate 14%"
+    # 2. "Sales Tax (5%)" or "Tax (5%)" — rate in parentheses, no "Rate" keyword
+    m = re.search(r"\btax\s*\(\s*([\d.]+)\s*%\s*\)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip() + "%"
+
+    # 3. "VAT 14%" or "VAT Rate 14%"
     m = re.search(r"\bvat\b\s*(?:rate)?\s*[:#]?\s*([\d.]+)\s*%", text, re.IGNORECASE)
     if m:
         return m.group(1).strip() + "%"
 
-    # 3. "Tax Amount 111.35" or "Tax: 111.35" or "Tax 111.35" (not followed by %)
+    # 4. "Tax Amount 111.35" or "Tax: 111.35" or "Tax 111.35" (not followed by %)
     m = re.search(
         r"\btax\s*(?:amount)?\s*[:#]?\s*[$€£¥]?([\d,]+\.?\d{0,2})(?!\s*%)",
         text, re.IGNORECASE,
@@ -288,7 +326,7 @@ def _find_tax(text: str) -> str:
     if m:
         return m.group(1).strip().replace(",", "")
 
-    # 4. "VAT Amount 111.35"
+    # 5. "VAT Amount 111.35"
     m = re.search(
         r"\bvat\s+amount\s*[:#]?\s*[$€£¥]?([\d,]+\.?\d{0,2})(?!\s*%)",
         text, re.IGNORECASE,

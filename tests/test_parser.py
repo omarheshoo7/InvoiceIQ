@@ -293,6 +293,96 @@ class TestLineItems:
         assert list(df.columns) == ["Description", "Quantity", "Unit Price", "Total"]
 
 
+# ── QTY-first invoice layout ──────────────────────────────────────────────────
+
+# Exact OCR text from the real invoice that triggered this fix.
+SAMPLE_QTY_FIRST = """\
+Your Company Inc.
+1234 Company St, & Upload Logo
+Company Town, ST 12345
+
+INVOICE
+
+Bill To
+
+Invoice # 0000007
+Customer Name voi
+1234 Customer St, Invoice date 10-02-2025
+Customer Town, ST 12345 Due date 10-16-2025
+
+Amount
+
+2 Furniture assembly (per hour) 50.00 $100.00
+1 Drywall patch & repair 150.00 $150.00
+1 Faucet replacement 120.00 $120.00
+1 Door lock installation 80.00 $80.00
+Subtotal $450.00
+
+Sales Tax (5%) $22.50
+
+Total (USD) $472.50
+
+Terms and Conditions
+Payment is due in 14 days
+
+Please make checks payable to: Your Company Inc.
+"""
+
+
+class TestQtyFirstLineItems:
+    """Tests for the QTY-first table layout (Pattern 2 fallback)."""
+
+    def test_item_count(self):
+        """All 4 line items must be found."""
+        df = parse_line_items(SAMPLE_QTY_FIRST)
+        assert len(df) == 4, f"Expected 4 items, got {len(df)}: {df.to_dict('records')}"
+
+    def test_furniture_assembly_with_parens(self):
+        """Description with parentheses must be captured in full."""
+        row = parse_line_items(SAMPLE_QTY_FIRST).iloc[0]
+        assert row["Description"] == "Furniture assembly (per hour)"
+        assert row["Quantity"]    == 2.0
+        assert row["Unit Price"]  == 50.0
+        assert row["Total"]       == 100.0
+
+    def test_drywall_with_ampersand(self):
+        """Ampersand in description must be captured."""
+        row = parse_line_items(SAMPLE_QTY_FIRST).iloc[1]
+        assert row["Description"] == "Drywall patch & repair"
+        assert row["Quantity"]    == 1.0
+        assert row["Unit Price"]  == 150.0
+        assert row["Total"]       == 150.0
+
+    def test_faucet_replacement(self):
+        row = parse_line_items(SAMPLE_QTY_FIRST).iloc[2]
+        assert row["Description"] == "Faucet replacement"
+        assert row["Unit Price"]  == 120.0
+        assert row["Total"]       == 120.0
+
+    def test_door_lock_installation(self):
+        row = parse_line_items(SAMPLE_QTY_FIRST).iloc[3]
+        assert row["Description"] == "Door lock installation"
+        assert row["Unit Price"]  == 80.0
+        assert row["Total"]       == 80.0
+
+    def test_sales_tax_in_parens(self):
+        """'Sales Tax (5%)' must be extracted as '5%'."""
+        assert parse_invoice(SAMPLE_QTY_FIRST)["tax"] == "5%"
+
+    def test_subtotal_extraction(self):
+        assert parse_invoice(SAMPLE_QTY_FIRST)["subtotal"] == "450.00"
+
+    def test_total_extraction(self):
+        assert parse_invoice(SAMPLE_QTY_FIRST)["total_amount"] == "472.50"
+
+    def test_zylker_pattern_not_broken(self):
+        """Ensure the existing Zylker extractor still works after adding Pattern 2."""
+        df = parse_line_items(SAMPLE_ZYLKER)
+        assert len(df) == 3
+        assert df.iloc[0]["Description"] == "Camera"
+        assert df.iloc[0]["Unit Price"]  == 899.0
+
+
 # ── Subtotal and Tax Extraction ───────────────────────────────────────────────
 
 class TestSubtotalExtraction:

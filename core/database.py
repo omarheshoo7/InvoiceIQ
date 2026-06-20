@@ -142,6 +142,33 @@ def search_invoices(query: str) -> pd.DataFrame:
     return df
 
 
+def load_line_items_all() -> pd.DataFrame:
+    """Return every saved line item joined with its invoice's vendor, date, and currency.
+
+    Useful for the analytics dashboard — callers can group by description,
+    vendor, or month without needing a separate join.
+    """
+    conn = _connect()
+    df = pd.read_sql_query(
+        """
+        SELECT li.description,
+               li.quantity,
+               li.unit_price,
+               li.total,
+               i.vendor_name,
+               i.invoice_date,
+               i.currency,
+               i.saved_at
+        FROM   line_items li
+        JOIN   invoices   i  ON li.invoice_id = i.id
+        ORDER  BY i.saved_at DESC
+        """,
+        conn,
+    )
+    conn.close()
+    return df
+
+
 def load_invoice_by_id(invoice_id: int) -> tuple[dict, pd.DataFrame]:
     """
     Load one invoice's fields and line items by primary key.
