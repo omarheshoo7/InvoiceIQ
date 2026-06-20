@@ -1,6 +1,14 @@
 # InvoiceIQ — Invoice-to-Excel AI Extractor
 
-A Python + Streamlit app that extracts structured data from invoice PDFs and images, lets you correct it manually, and exports a clean Excel file.
+A Python + Streamlit app that extracts structured data from invoice PDFs and images, lets you correct it manually, exports a clean Excel file, and visualises spending trends on an analytics dashboard.
+
+**Key features:**
+- Upload PDF (digital or scanned) or image → auto-extract Invoice Number, Date, Vendor, Subtotal, Tax, Total, and Line Items
+- Manual correction form — fix any misread fields before exporting
+- Non-blocking validation warnings (missing fields, math errors, suspicious totals)
+- One-click export to a styled `.xlsx` Excel file
+- SQLite invoice history — save, search, and re-open past invoices
+- Analytics dashboard — spending trends, vendor summaries, and KPI cards
 
 ## Features
 
@@ -29,6 +37,18 @@ A Python + Streamlit app that extracts structured data from invoice PDFs and ima
 - **Re-open** — click any record to reload its fields and line items back into the main form, ready to edit and re-export
 - **Delete** — remove a record with a confirmation step; line items are removed automatically
 
+### Milestone 4 — Analytics Dashboard
+- **Total Invoiced** KPI — sum of all saved invoice totals
+- **Invoice Count** KPI — total number of saved invoices
+- **Unique Vendors** KPI — count of distinct vendor names
+- **Average Invoice** KPI — mean invoice value across all records
+- **Monthly Spending** bar chart — total spend grouped by invoice month, with `saved_at` as a fallback when Invoice Date is blank
+- **Top Vendors** horizontal bar chart — top 10 vendors ranked by total spend
+- **Currency Breakdown** donut chart — invoice count split by currency
+- **Top Line Items** bar chart — top 10 most-billed line item descriptions by total spend
+- Mixed-currency invoices handled gracefully — KPIs note when totals span multiple currencies
+- Requires at least 2 saved invoices; shows a friendly prompt otherwise
+
 ## Tech Stack
 
 | Layer | Library |
@@ -39,6 +59,7 @@ A Python + Streamlit app that extracts structured data from invoice PDFs and ima
 | Data | pandas |
 | Excel export | openpyxl |
 | Database | SQLite (stdlib `sqlite3`) |
+| Charts | Plotly Express |
 
 ## Project Structure
 
@@ -56,7 +77,8 @@ InvoiceIQ/
 │   └── database.py     # SQLite read/write helpers
 │
 ├── pages/
-│   └── history.py      # Streamlit History page
+│   ├── history.py      # Streamlit History page
+│   └── analytics.py    # Streamlit Analytics Dashboard
 │
 ├── tests/
 │   └── test_parser.py  # pytest smoke tests for the parser
@@ -126,5 +148,5 @@ The regex parser works well for common invoice layouts. For unusual formats, use
 | ✅ 1 | Upload → OCR/parse → manual correct → export Excel |
 | ✅ 2 | Validation layer (missing fields, suspicious values, warnings) |
 | ✅ 3 | SQLite history — save, browse, re-open, delete past invoices |
-| 4 | Plotly dashboard — spending trends, vendor summaries |
+| ✅ 4 | Analytics dashboard — KPI cards, spending trends, vendor summaries |
 | 5 | Optional AI parser (Claude/GPT) for higher accuracy |
