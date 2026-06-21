@@ -1,18 +1,40 @@
 # InvoiceIQ — Invoice-to-Excel Extractor
 
-> A Python + Streamlit portfolio project that extracts structured data from invoice PDFs and images, lets you correct it, exports a styled Excel file, and visualises spending trends on an analytics dashboard.
+> A Python + Streamlit portfolio project that converts messy invoice PDFs and images into structured, Excel-ready financial data — with OCR, rule-based parsing, validation, history, and an analytics dashboard.
 
-Built milestone-by-milestone: regex parsing → validation → SQLite history → analytics → polish.
+Built milestone-by-milestone: OCR + regex parsing → validation → SQLite history → analytics → polish.
 
 ---
 
 ## Screenshots
 
-Screenshots will be added after the first deployment. The `screenshots/` folder is reserved for them.
+| Upload & Extraction | Validation |
+|:---:|:---:|
+| ![Upload and extraction](screenshots/upload_extraction.png) | ![Validation panel](screenshots/validation.png) |
 
-| Upload & Extract | Review & Correct | Analytics Dashboard |
-|:---:|:---:|:---:|
-| *(coming soon)* | *(coming soon)* | *(coming soon)* |
+| History Page | Analytics Dashboard |
+|:---:|:---:|
+| ![Invoice history page](screenshots/history_page.png) | ![Analytics dashboard](screenshots/analytics_dashboard.png) |
+
+**Excel Output**
+
+![Excel output](screenshots/excel_output.png)
+
+---
+
+## Why I Built This
+
+Businesses receive invoices in all shapes and formats — digital PDFs, scanned images, inconsistent layouts. Manually copying figures into spreadsheets is slow, error-prone, and hard to audit at scale.
+
+InvoiceIQ automates that pipeline: it reads the raw file, extracts every relevant field and line item, validates the maths, and delivers a clean Excel file in seconds. The project goes beyond a simple OCR demo by covering the full document-processing lifecycle:
+
+- **Extraction** — dual strategy (native PDF text first, OCR fallback) for reliability across file types
+- **Parsing** — rule-based field and line-item extraction handling two common invoice table layouts
+- **Validation** — non-blocking checks for missing fields, tax calculations, and line-item sums
+- **History** — SQLite persistence so past invoices can be retrieved, reviewed, and re-exported at any time
+- **Analytics** — KPI cards and Plotly charts that surface spending trends across all saved invoices
+
+The result is a portfolio-ready, end-to-end document intelligence project built entirely with open-source Python tools.
 
 ---
 
@@ -28,7 +50,48 @@ Screenshots will be added after the first deployment. The `screenshots/` folder 
 
 ---
 
-## Demo Workflow
+## System Workflow
+
+```
+PDF / Image Upload
+      │
+      ▼
+Text Extraction
+  ├── PyMuPDF  ──────── digital PDF  (native text, fast and accurate)
+  └── pytesseract OCR ─ scanned PDF or image  (Tesseract 5)
+      │
+      ▼
+Rule-based Invoice Parser
+  ├── Header fields  →  Invoice Number, Date, Vendor, Currency
+  ├── Financials     →  Subtotal, Tax (rate or amount), Total
+  └── Line items     →  two layout patterns (Zylker-style and QTY-first)
+      │
+      ▼
+Manual Review & Correction
+  └── Editable form + interactive line items table
+      │
+      ▼
+Validation Layer
+  ├── Required field presence
+  ├── Subtotal + Tax ≈ Total
+  └── Sum of line item totals ≈ Invoice total
+      │
+      ▼
+Excel Export
+  └── Styled .xlsx — header block + formatted line items table
+      │
+      ▼
+SQLite History
+  └── Save · Search · Re-open · Delete  (with ON DELETE CASCADE)
+      │
+      ▼
+Analytics Dashboard
+  └── KPI cards · Monthly spend · Top vendors · Currency split · Top line items
+```
+
+---
+
+## Using the App
 
 1. **Upload** — drag a PDF or image onto the file uploader on the main page
 2. **Extract** — the app auto-extracts all fields and line items (digital PDFs use native text; scanned files use OCR)
@@ -62,6 +125,8 @@ InvoiceIQ/
 ├── app.py               # Main Streamlit page (upload → extract → correct → export → save)
 ├── requirements.txt     # Runtime dependencies
 ├── requirements-dev.txt # Dev/test dependencies (pytest)
+├── packages.txt         # APT packages for Streamlit Cloud (tesseract-ocr)
+├── LICENSE              # MIT License
 ├── .gitignore
 │
 ├── core/
@@ -78,7 +143,9 @@ InvoiceIQ/
 ├── tests/
 │   └── test_parser.py   # 49 pytest tests covering parser and validator
 │
-├── screenshots/         # App screenshots (for README and portfolio)
+├── screenshots/         # App screenshots displayed in this README
+│
+├── sample_invoices/     # Synthetic sample invoices for testing (no real data committed)
 │
 └── data/
     ├── uploads/         # Temporary upload folder (gitignored)
@@ -128,11 +195,23 @@ pytest tests/ -v
 
 ---
 
+## Sample Invoices
+
+The `sample_invoices/` folder is reserved for synthetic test invoices. Adding sample files here lets anyone clone the repo and immediately test the full pipeline — OCR, parsing, validation, history, and analytics — without needing to source their own invoice PDFs.
+
+**What to add:** Synthetic or anonymised invoices that cover different formats (digital PDF, scanned image, varying line-item layouts).
+
+**What NOT to add:** Real invoices containing private or confidential data. Never commit files with actual vendor names, amounts, or personal information.
+
+If you have synthetic samples, drop them in `sample_invoices/` and add a short description here.
+
+---
+
 ## Deploying to Streamlit Cloud
 
 The app can be deployed to [Streamlit Community Cloud](https://streamlit.io/cloud) with one important caveat.
 
-**Tesseract must be installed on the server.** Add a `packages.txt` file at the repo root containing:
+**Tesseract must be installed on the server.** The `packages.txt` file at the repo root already contains:
 
 ```
 tesseract-ocr
@@ -146,19 +225,56 @@ Streamlit Cloud reads `packages.txt` and installs APT packages before starting t
 
 ## Current Limitations
 
-- **Regex parsing only** — works well for common invoice layouts; unusual or highly irregular formats may require manual field correction
-- **English field labels** — the parser matches labels like "Invoice Number", "Date", "Total" in English; other languages are not supported
-- **Ephemeral history on the cloud** — SQLite is a local file; history is lost between Streamlit Cloud restarts (see deployment note above)
-- **No multi-page deduplication** — very long invoices with repeated header rows across pages may produce duplicate line items
+**OCR engine (Tesseract)**
+
+The app uses Tesseract through pytesseract for OCR. Tesseract is free, open-source, and lightweight — suitable for local testing and common invoice formats. However, it is not always the best choice for production-level invoice processing. Tesseract can struggle with:
+
+- Complex or irregular table layouts
+- Low-resolution or heavily compressed scans
+- Unusual or decorative fonts
+- Rotated, skewed, or tilted documents
+- Handwritten annotations or mixed handwriting/print
+- Multi-column layouts where text columns bleed into each other
+
+For production use, a document-intelligence service (see [Future Improvements](#future-improvements)) would provide significantly higher accuracy.
+
+**Parser**
+
+- Rule-based parsing works best on common invoice formats with standard English field labels; unusual layouts or non-standard label names may require manual correction in the app
+- OCR quality has a direct impact on parser accuracy — a garbled OCR output will produce incorrect extracted values regardless of parser quality
+
+**Data and storage**
+
+- Multi-currency invoices are stored and displayed by currency code; no live exchange-rate conversion is applied, so cross-currency totals on the analytics dashboard are nominal sums
+- SQLite is a single-file local database and is not intended as a production multi-user store; the file resets on each Streamlit Cloud restart
+
+**Language**
+
+- Field label matching is English-only; invoices in other languages are not currently supported
 
 ---
 
 ## Future Improvements
 
-- **LLM-assisted parsing** — use Claude or GPT as a fallback for invoices the regex parser cannot handle
+**Better OCR and document intelligence**
+
+The most impactful upgrade would be replacing or supplementing Tesseract with a table-aware document AI model. Any of these options would improve accuracy on complex tables, low-quality scans, and non-standard layouts significantly over Tesseract alone:
+
+| Option | Notes |
+|--------|-------|
+| **PaddleOCR** | Open-source, table-aware, strong on non-English and complex layouts |
+| **Google Document AI — Invoice Parser** | Cloud API, pre-trained specifically on invoices |
+| **Amazon Textract** | AWS cloud API with table and key-value form extraction |
+| **Azure AI Document Intelligence** | Microsoft cloud API, invoice-specific pre-built model |
+| **LLM-assisted fallback (Claude / GPT)** | Use a language model to parse invoices the regex engine cannot handle |
+
+**App features**
+
+- **Duplicate invoice detection** — warn before saving when an invoice number already exists in history
+- **Bulk upload** — process a folder of invoices at once and export a combined summary spreadsheet
+- **Dashboard filters** — filter analytics charts by date range, vendor, or currency
 - **Multi-language support** — detect and match field labels in French, Arabic, German, and other languages
 - **Hosted database** — replace SQLite with Supabase or PostgreSQL for persistent, multi-user history
-- **Bulk upload** — process a folder of invoices at once and export a combined summary spreadsheet
 - **Email integration** — pull invoice attachments directly from Gmail or Outlook via API
 - **CSV export** — add a second download option alongside Excel
 
@@ -171,7 +287,17 @@ Copy-paste ready for a resume or LinkedIn:
 - Built **InvoiceIQ**, a Python + Streamlit app that extracts structured data from invoice PDFs using PyMuPDF and pytesseract OCR, then exports styled Excel files via openpyxl
 - Designed a **dual-pattern regex parser** handling multiple invoice table layouts; built a non-blocking validation layer that checks field presence, math consistency (Subtotal + Tax = Total), and suspicious totals
 - Implemented a **SQLite history module** (save, search, re-open, delete with cascade) and an **analytics dashboard** with KPI cards and Plotly charts for monthly spend, top vendors, currency split, and line-item summaries
-- Wrote a **49-test pytest suite** covering all parser branches and validation rules; structured the project for GitHub with `.gitignore`, `requirements.txt`, and a full portfolio README
+- Wrote a **49-test pytest suite** covering all parser branches and validation rules; structured the project for GitHub with `.gitignore`, `requirements.txt`, `packages.txt`, and a full portfolio README
+
+---
+
+## Repository Polish Checklist
+
+- ✅ Screenshots added and displayed in README
+- ✅ 49 automated tests included (`pytest tests/ -v`)
+- ✅ Streamlit Cloud deployment dependency documented (`packages.txt` with `tesseract-ocr`)
+- ✅ MIT License added (`LICENSE`)
+- ✅ Future OCR and document-intelligence improvements documented
 
 ---
 
@@ -206,4 +332,4 @@ The regex parser works well for standard layouts. Use the manual correction form
 | 3 | SQLite history — save, browse, re-open, delete | ✅ Done |
 | 4 | Analytics dashboard — KPI cards, spending trends, vendor summaries | ✅ Done |
 | 5 | Polish, screenshots, deployment preparation | ✅ Done |
-| 6 | Optional — LLM-assisted parsing (Claude / GPT) for higher accuracy | Future |
+| 6 | Optional — better OCR / LLM-assisted parsing for higher accuracy | Future |
