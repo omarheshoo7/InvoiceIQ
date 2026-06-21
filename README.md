@@ -280,17 +280,6 @@ The most impactful upgrade would be replacing or supplementing Tesseract with a 
 
 ---
 
-## CV / Portfolio Bullet Points
-
-Copy-paste ready for a resume or LinkedIn:
-
-- Built **InvoiceIQ**, a Python + Streamlit app that extracts structured data from invoice PDFs using PyMuPDF and pytesseract OCR, then exports styled Excel files via openpyxl
-- Designed a **dual-pattern regex parser** handling multiple invoice table layouts; built a non-blocking validation layer that checks field presence, math consistency (Subtotal + Tax = Total), and suspicious totals
-- Implemented a **SQLite history module** (save, search, re-open, delete with cascade) and an **analytics dashboard** with KPI cards and Plotly charts for monthly spend, top vendors, currency split, and line-item summaries
-- Wrote a **49-test pytest suite** covering all parser branches and validation rules; structured the project for GitHub with `.gitignore`, `requirements.txt`, `packages.txt`, and a full portfolio README
-
----
-
 ## Repository Polish Checklist
 
 - ✅ Screenshots added and displayed in README
