@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("📄 InvoiceIQ — Invoice-to-Excel Extractor")
-st.caption("Upload an invoice PDF or image · review extracted fields · export clean Excel.")
+st.caption("Upload a PDF or image · auto-extract fields and line items · correct if needed · export to Excel · save to history.")
 
 # Ensure DB and tables exist on every page load (no-op if already created)
 init_db()
@@ -168,6 +168,7 @@ st.divider()
 
 # ── Export ────────────────────────────────────────────────────────────────────
 st.subheader("Export")
+st.caption("Generates a styled `.xlsx` file containing the invoice fields and the full line items table.")
 
 if st.button("Generate Excel File", type="primary"):
     with st.spinner("Building Excel file…"):
